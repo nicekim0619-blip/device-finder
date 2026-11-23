@@ -25,10 +25,15 @@ class RadarView(context: Context) : View(context) {
     var blips: List<Blip> = emptyList()
         set(value) { field = value; invalidate() }
 
+    /** 기기 방향 화살표 (폰이 보는 방향 기준 각도, 0=화면 위쪽). null이면 안 그림 */
+    var arrowDeg: Float? = null
+        set(value) { field = value; invalidate() }
+
     var sweeping = false
         set(value) { field = value; invalidate() }
 
     private val maxMeters = 15.0
+    private val shown = HashMap<Double, Double>()   // 점이 부드럽게 움직이도록 화면에 그린 거리 기억
     private var sweepAngle = 0f
     private var sweepShader: SweepGradient? = null
 
@@ -42,6 +47,9 @@ class RadarView(context: Context) : View(context) {
     private val sweepPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG)
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 32f }
+    private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 70, 70); strokeCap = Paint.Cap.ROUND
+    }
     private val me = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 32f; isFakeBoldText = true }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -81,7 +89,10 @@ class RadarView(context: Context) : View(context) {
         }
 
         for (b in blips) {
-            val rr = (min(b.distance / maxMeters, 1.0) * r).toFloat()
+            val cur = shown[b.angle] ?: b.distance
+            val smooth = cur + (b.distance - cur) * 0.05
+            shown[b.angle] = smooth
+            val rr = (min(smooth / maxMeters, 1.0) * r).toFloat()
             val x = cx + (cos(b.angle) * rr).toFloat()
             val y = cy + (sin(b.angle) * rr).toFloat()
             val a = (b.alpha * 255).toInt()
@@ -95,9 +106,23 @@ class RadarView(context: Context) : View(context) {
             c.drawText(b.label.take(12), x + 22f, y + 10f, label)
         }
 
+        arrowDeg?.let { deg ->
+            val a = Math.toRadians(deg.toDouble() - 90.0)
+            val tipX = cx + (cos(a) * r * 0.92).toFloat()
+            val tipY = cy + (sin(a) * r * 0.92).toFloat()
+            arrow.strokeWidth = 12f
+            c.drawLine(cx, cy, tipX, tipY, arrow)
+            val back = r * 0.12
+            for (side in listOf(-0.45, 0.45)) {
+                val bx = tipX - (cos(a + side) * back).toFloat()
+                val by = tipY - (sin(a + side) * back).toFloat()
+                c.drawLine(tipX, tipY, bx, by, arrow)
+            }
+        }
+
         c.drawCircle(cx, cy, 12f, me)
         c.drawText("나", cx - 14f, cy + 46f, me)
 
-        if (sweeping) postInvalidateOnAnimation()
+        if (sweeping || arrowDeg != null) postInvalidateOnAnimation()
     }
 }
