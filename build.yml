@@ -5,6 +5,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: 파일 정리
+        run: |
+          if [ -f MainActivity.kt ]; then
+            mkdir -p app/src/main/java/com/hi/devicefinder
+            mv MainActivity.kt RadarView.kt app/src/main/java/com/hi/devicefinder/
+            mv AndroidManifest.xml app/src/main/
+            for f in build.gradle*.kts; do
+              if grep -q "apply false" "$f"; then mv "$f" root.tmp; else mv "$f" app/build.gradle.kts; fi
+            done
+            mv root.tmp build.gradle.kts
+          fi
+          ls -R app
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
