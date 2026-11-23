@@ -29,6 +29,13 @@ class RadarView(context: Context) : View(context) {
     var arrowDeg: Float? = null
         set(value) { field = value; invalidate() }
 
+    /** 방향 찾기 중: 12칸(30도씩, 나침반 기준) 중 확인된 칸. null이면 안 그림 */
+    var coverage: BooleanArray? = null
+        set(value) { field = value; invalidate() }
+
+    /** 폰이 지금 보고 있는 나침반 방향 */
+    var headingDeg = 0f
+
     var sweeping = false
         set(value) { field = value; invalidate() }
 
@@ -49,6 +56,9 @@ class RadarView(context: Context) : View(context) {
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 32f }
     private val arrow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(255, 70, 70); strokeCap = Paint.Cap.ROUND
+    }
+    private val ring2 = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 18f; strokeCap = Paint.Cap.BUTT
     }
     private val me = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 32f; isFakeBoldText = true }
 
@@ -106,6 +116,18 @@ class RadarView(context: Context) : View(context) {
             c.drawText(b.label.take(12), x + 22f, y + 10f, label)
         }
 
+        coverage?.let { cov ->
+            val oval = android.graphics.RectF(cx - r + 10f, cy - r + 10f, cx + r - 10f, cy + r - 10f)
+            for (i in 0 until 12) {
+                // 칸 i는 나침반 i*30~i*30+30도. 화면 위쪽 = 폰이 보는 방향
+                val startAng = i * 30f - headingDeg - 90f + 1.5f
+                ring2.color = if (cov[i]) Color.rgb(77, 255, 143) else Color.argb(110, 160, 160, 160)
+                c.drawArc(oval, startAng, 27f, false, ring2)
+            }
+            // 지금 보고 있는 방향 표시 (위쪽 작은 삼각형)
+            c.drawCircle(cx, cy - r + 10f, 9f, me)
+        }
+
         arrowDeg?.let { deg ->
             val a = Math.toRadians(deg.toDouble() - 90.0)
             val tipX = cx + (cos(a) * r * 0.92).toFloat()
@@ -123,6 +145,6 @@ class RadarView(context: Context) : View(context) {
         c.drawCircle(cx, cy, 12f, me)
         c.drawText("나", cx - 14f, cy + 46f, me)
 
-        if (sweeping || arrowDeg != null) postInvalidateOnAnimation()
+        if (sweeping || arrowDeg != null || coverage != null) postInvalidateOnAnimation()
     }
 }

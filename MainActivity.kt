@@ -149,6 +149,7 @@ class MainActivity : Activity() {
             SensorManager.getOrientation(m, o)
             heading = ((Math.toDegrees(o[0].toDouble()) + 360) % 360).toFloat()
             radar.arrowDeg = dirBest?.let { it - heading }
+            radar.headingDeg = heading
         }
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     }
@@ -275,7 +276,12 @@ class MainActivity : Activity() {
     }
 
     // ───────────────────────── 방향 찾기 ─────────────────────────
+    // 폰 각도(나침반)로 "어느 쪽을 볼 때 신호가 얼마였는지"를 칸마다 기록해요.
+    // 그래서 일정한 속도로 돌 필요 없이, 아무렇게나 돌려도 빈 칸만 채우면 돼요.
+    private val needPerBin = 3          // 한 칸(30도)마다 신호 3번 이상이면 "확인됨"
+
     private fun startDirection() {
+        if (dirMode) { finishDirection(); return }     // 진행 중에 다시 누르면 "여기까지로 결정"
         if (!scanning || trackedAddr == null) { dirText.text = "먼저 스캔을 켜고 기기를 골라 주세요."; return }
         if (sensorMgr.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) == null) { dirText.text = "이 폰에는 나침반 센서가 없어요."; return }
         dirBins.forEach { it.clear() }
@@ -283,35 +289,43 @@ class MainActivity : Activity() {
         radar.arrowDeg = null
         dirStart = SystemClock.elapsedRealtime()
         dirMode = true
-        dirBtn.isEnabled = false
-        dirText.text = "폰을 눕혀서 가슴 앞에 들고,\n제자리에서 아주 천천히 한 바퀴 돌아요 (20초쯤)"
+        dirBtn.text = "✅ 여기까지로 결정"
+        dirText.text = "폰을 눕혀서 가슴 앞에 들고 제자리에서 돌아요.\n빠르든 느리든 상관없어요. 레이더 테두리의 빈 칸을 채우면 돼요!"
     }
 
     /** 0.5초마다: 방향 찾기 진행 확인 */
     private fun updateDirection() {
-        if (!dirMode) return
-        val covered = dirBins.count { it.isNotEmpty() }
-        val sec = (SystemClock.elapsedRealtime() - dirStart) / 1000
-        dirText.text = "천천히 도는 중... ${covered}/12 방향 확인 (${sec}초)"
-        if (covered >= 11 || sec >= 30) {
-            dirMode = false
-            dirBtn.isEnabled = true
-            if (covered < 6) {
-                dirText.text = "신호가 부족해요 😢 더 천천히 돌거나 다시 해 보세요."
-                return
-            }
-            // 이웃 칸까지 합쳐서 평균이 제일 센 방향 찾기
-            val avg = dirBins.map { if (it.isEmpty()) null else it.average() }
-            var bestI = 0; var bestV = -999.0
-            for (i in 0 until 12) {
-                val near = listOf(avg[(i + 11) % 12], avg[i], avg[i], avg[(i + 1) % 12]).filterNotNull()
-                if (near.isEmpty()) continue
-                val v = near.average()
-                if (v > bestV) { bestV = v; bestI = i }
-            }
-            dirBest = bestI * 30f + 15f
-            dirText.text = "찾았다! 🔴 빨간 화살표 쪽으로 가 보세요.\n(폰을 돌려도 화살표가 그 방향을 계속 가리켜요)"
+        if (!dirMode) { radar.coverage = null; return }
+        val done = BooleanArray(12) { dirBins[it].size >= needPerBin }
+        radar.coverage = done
+        radar.headingDeg = heading
+        val covered = done.count { it }
+        if (covered >= 12) { finishDirection(); return }
+        val missing = 12 - covered
+        dirText.text = "확인 ${covered}/12칸 · 남은 칸 ${missing}개\n" +
+            "레이더 테두리의 회색 칸 쪽으로 몸을 돌려 주세요 (서두르지 않아도 돼요)"
+    }
+
+    private fun finishDirection() {
+        dirMode = false
+        dirBtn.text = "🧭 방향 찾기"
+        radar.coverage = null
+        val covered = dirBins.count { it.size >= needPerBin }
+        if (covered < 6) {
+            dirText.text = "아직 확인한 방향이 ${covered}칸뿐이라 판단이 어려워요 😢\n다시 눌러서 더 돌아 주세요."
+            return
         }
+        // 이웃 칸까지 합쳐서 평균 신호가 제일 센 방향 찾기
+        val avg = dirBins.map { if (it.isEmpty()) null else it.average() }
+        var bestI = 0; var bestV = -999.0
+        for (i in 0 until 12) {
+            val near = listOf(avg[(i + 11) % 12], avg[i], avg[i], avg[(i + 1) % 12]).filterNotNull()
+            if (near.isEmpty()) continue
+            val v = near.average()
+            if (v > bestV) { bestV = v; bestI = i }
+        }
+        dirBest = bestI * 30f + 15f
+        dirText.text = "찾았다! 🔴 빨간 화살표 쪽으로 가 보세요.\n(폰을 돌려도 화살표가 그 방향을 계속 가리켜요)"
     }
 
     // ───────────────────────── 권한 & 시작 ─────────────────────────
@@ -389,7 +403,8 @@ class MainActivity : Activity() {
         radar.sweeping = false
         sensorMgr.unregisterListener(compass)
         dirMode = false
-        if (::dirBtn.isInitialized) dirBtn.isEnabled = true
+        if (::dirBtn.isInitialized) dirBtn.text = "🧭 방향 찾기"
+        radar.coverage = null
         scanBtn.text = "🌐 주변 스캔 시작"
         status.text = "멈췄어요."
     }
@@ -494,7 +509,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     trackedAddr = if (trackedAddr == d.address) null else d.address
                     dirBest = null; dirMode = false; radar.arrowDeg = null
-                    dirBtn.isEnabled = true; dirText.text = ""
+                    dirBtn.text = "🧭 방향 찾기"; radar.coverage = null; dirText.text = ""
                     renderTarget(); renderList()
                 }
             }
