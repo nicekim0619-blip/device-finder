@@ -278,7 +278,8 @@ class MainActivity : Activity() {
     // ───────────────────────── 방향 찾기 ─────────────────────────
     // 폰 각도(나침반)로 "어느 쪽을 볼 때 신호가 얼마였는지"를 칸마다 기록해요.
     // 그래서 일정한 속도로 돌 필요 없이, 아무렇게나 돌려도 빈 칸만 채우면 돼요.
-    private val needPerBin = 3          // 한 칸(30도)마다 신호 3번 이상이면 "확인됨"
+    private val needPerBin = 2          // 한 칸(30도)마다 신호 2번 이상이면 "확인됨"
+    private var dirSamples = 0          // 방향 찾기 중 받은 신호 수
 
     private fun startDirection() {
         if (dirMode) { finishDirection(); return }     // 진행 중에 다시 누르면 "여기까지로 결정"
@@ -289,6 +290,9 @@ class MainActivity : Activity() {
         radar.arrowDeg = null
         dirStart = SystemClock.elapsedRealtime()
         dirMode = true
+        dirSamples = 0
+        // 클래식 검색은 BLE 스캔을 방해해서, 방향 찾는 동안은 잠깐 멈춤
+        try { btAdapter?.cancelDiscovery() } catch (_: SecurityException) {}
         dirBtn.text = "✅ 여기까지로 결정"
         dirText.text = "폰을 눕혀서 가슴 앞에 들고 제자리에서 돌아요.\n빠르든 느리든 상관없어요. 레이더 테두리의 빈 칸을 채우면 돼요!"
     }
@@ -302,12 +306,18 @@ class MainActivity : Activity() {
         val covered = done.count { it }
         if (covered >= 12) { finishDirection(); return }
         val missing = 12 - covered
-        dirText.text = "확인 ${covered}/12칸 · 남은 칸 ${missing}개\n" +
+        val sec = (SystemClock.elapsedRealtime() - dirStart) / 1000
+        if (sec >= 8 && dirSamples == 0) {
+            dirText.text = "이 기기 신호가 안 들어와요 😢\n이어폰이면 케이스를 열고, 폰이면 블루투스 설정 화면을 켜 두세요."
+            return
+        }
+        dirText.text = "확인 ${covered}/12칸 · 남은 칸 ${missing}개 · 받은 신호 ${dirSamples}개\n" +
             "레이더 테두리의 회색 칸 쪽으로 몸을 돌려 주세요 (서두르지 않아도 돼요)"
     }
 
     private fun finishDirection() {
         dirMode = false
+        if (scanning) try { btAdapter?.startDiscovery() } catch (_: SecurityException) {}
         dirBtn.text = "🧭 방향 찾기"
         radar.coverage = null
         val covered = dirBins.count { it.size >= needPerBin }
@@ -437,7 +447,7 @@ class MainActivity : Activity() {
                 }
                 // 클래식 검색은 12초쯤 하고 끝나서, 스캔 중이면 다시 시작
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> {
-                    if (scanning) try { btAdapter?.startDiscovery() } catch (_: SecurityException) {}
+                    if (scanning && !dirMode) try { btAdapter?.startDiscovery() } catch (_: SecurityException) {}
                 }
             }
         }
@@ -464,7 +474,7 @@ class MainActivity : Activity() {
             d.rssi = if (d.recent.size == 1) median else d.rssi * 0.85 + median * 0.15
             d.lastSeen = now
             guess(d)
-            if (dirMode && key == trackedAddr) dirBins[((heading / 30).toInt()) % 12].add(rssi)
+            if (dirMode && key == trackedAddr) { dirBins[((heading / 30).toInt()) % 12].add(rssi); dirSamples++ }
         }
     }
 
