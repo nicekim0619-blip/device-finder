@@ -306,12 +306,7 @@ class MainActivity : Activity() {
         radar.headingDeg = heading
         val covered = done.count { it }
         if (covered >= BINS) { finishDirection(); return }
-        // 절반 넘게 채우면 미리 보기 화살표 (끝나는 건 12칸을 다 채우거나 직접 결정할 때만)
-        if (covered >= BINS / 2) {
-            val best = bestDirection().first
-            dirBest = best
-            radar.arrowDeg = best - heading
-        }
+        // 화살표는 12칸을 다 채우거나 직접 결정했을 때만 나와요
         val missing = BINS - covered
         val sec = (SystemClock.elapsedRealtime() - dirStart) / 1000
         if (sec >= 8 && dirSamples == 0) {
