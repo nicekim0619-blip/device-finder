@@ -279,7 +279,7 @@ class MainActivity : Activity() {
     // ───────────────────────── 방향 찾기 ─────────────────────────
     // 폰 각도(나침반)로 "어느 쪽을 볼 때 신호가 얼마였는지"를 칸마다 기록해요.
     // 그래서 일정한 속도로 돌 필요 없이, 아무렇게나 돌려도 빈 칸만 채우면 돼요.
-    private val needPerBin = 1          // 한 칸마다 신호 1번이면 "확인됨"
+    private val needPerBin = 2          // 한 칸마다 신호 2번 이상이면 "확인됨"
     private var dirSamples = 0          // 방향 찾기 중 받은 신호 수
 
     private fun startDirection() {
