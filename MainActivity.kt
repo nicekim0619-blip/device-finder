@@ -136,7 +136,8 @@ class MainActivity : Activity() {
     private var heading = 0f                   // 폰이 보고 있는 방향 (0=북쪽)
     private var dirMode = false
     private var dirStart = 0L
-    private val dirBins = Array(12) { mutableListOf<Int>() }   // 30도씩 12칸
+    private val BINS = 12                                       // 30도씩 12칸
+    private val dirBins = Array(12) { mutableListOf<Int>() }
     private var dirBest: Float? = null         // 기기가 있는 방향 (나침반 각도)
     private lateinit var dirBtn: Button
     private lateinit var dirText: TextView
@@ -278,7 +279,7 @@ class MainActivity : Activity() {
     // ───────────────────────── 방향 찾기 ─────────────────────────
     // 폰 각도(나침반)로 "어느 쪽을 볼 때 신호가 얼마였는지"를 칸마다 기록해요.
     // 그래서 일정한 속도로 돌 필요 없이, 아무렇게나 돌려도 빈 칸만 채우면 돼요.
-    private val needPerBin = 2          // 한 칸(30도)마다 신호 2번 이상이면 "확인됨"
+    private val needPerBin = 1          // 한 칸마다 신호 1번이면 "확인됨"
     private var dirSamples = 0          // 방향 찾기 중 받은 신호 수
 
     private fun startDirection() {
@@ -300,19 +301,41 @@ class MainActivity : Activity() {
     /** 0.5초마다: 방향 찾기 진행 확인 */
     private fun updateDirection() {
         if (!dirMode) { radar.coverage = null; return }
-        val done = BooleanArray(12) { dirBins[it].size >= needPerBin }
+        val done = BooleanArray(BINS) { dirBins[it].size >= needPerBin }
         radar.coverage = done
         radar.headingDeg = heading
         val covered = done.count { it }
-        if (covered >= 12) { finishDirection(); return }
-        val missing = 12 - covered
+        if (covered >= BINS) { finishDirection(); return }
+        // 절반 넘게 채우면 미리 화살표를 보여주고, 차이가 뚜렷하면 바로 끝내기
+        if (covered >= BINS / 2) {
+            val (best, contrast) = bestDirection()
+            dirBest = best
+            radar.arrowDeg = best - heading
+            if (covered >= BINS * 2 / 3 && contrast >= 8.0) { finishDirection(); return }
+        }
+        val missing = BINS - covered
         val sec = (SystemClock.elapsedRealtime() - dirStart) / 1000
         if (sec >= 8 && dirSamples == 0) {
             dirText.text = "이 기기 신호가 안 들어와요 😢\n이어폰이면 케이스를 열고, 폰이면 블루투스 설정 화면을 켜 두세요."
             return
         }
-        dirText.text = "확인 ${covered}/12칸 · 남은 칸 ${missing}개 · 받은 신호 ${dirSamples}개\n" +
+        dirText.text = "확인 ${covered}/${BINS}칸 · 남은 칸 ${missing}개 · 받은 신호 ${dirSamples}개\n" +
             "레이더 테두리의 회색 칸 쪽으로 몸을 돌려 주세요 (서두르지 않아도 돼요)"
+    }
+
+    /** 신호가 제일 센 방향(나침반 각도)과, 제일 센 칸과 제일 약한 칸의 차이(dB) */
+    private fun bestDirection(): Pair<Float, Double> {
+        val avg = dirBins.map { if (it.isEmpty()) null else it.average() }
+        var bestI = 0; var bestV = -999.0; var worstV = 999.0
+        for (i in 0 until BINS) {
+            val near = listOf(avg[(i + BINS - 1) % BINS], avg[i], avg[i], avg[(i + 1) % BINS]).filterNotNull()
+            if (near.isEmpty()) continue
+            val v = near.average()
+            if (v > bestV) { bestV = v; bestI = i }
+            if (v < worstV) worstV = v
+        }
+        val size = 360f / BINS
+        return Pair(bestI * size + size / 2, bestV - worstV)
     }
 
     private fun finishDirection() {
@@ -321,20 +344,11 @@ class MainActivity : Activity() {
         dirBtn.text = "🧭 방향 찾기"
         radar.coverage = null
         val covered = dirBins.count { it.size >= needPerBin }
-        if (covered < 6) {
+        if (covered < BINS / 2) {
             dirText.text = "아직 확인한 방향이 ${covered}칸뿐이라 판단이 어려워요 😢\n다시 눌러서 더 돌아 주세요."
             return
         }
-        // 이웃 칸까지 합쳐서 평균 신호가 제일 센 방향 찾기
-        val avg = dirBins.map { if (it.isEmpty()) null else it.average() }
-        var bestI = 0; var bestV = -999.0
-        for (i in 0 until 12) {
-            val near = listOf(avg[(i + 11) % 12], avg[i], avg[i], avg[(i + 1) % 12]).filterNotNull()
-            if (near.isEmpty()) continue
-            val v = near.average()
-            if (v > bestV) { bestV = v; bestI = i }
-        }
-        dirBest = bestI * 30f + 15f
+        dirBest = bestDirection().first
         dirText.text = "찾았다! 🔴 빨간 화살표 쪽으로 가 보세요.\n(폰을 돌려도 화살표가 그 방향을 계속 가리켜요)"
     }
 
@@ -474,7 +488,7 @@ class MainActivity : Activity() {
             d.rssi = if (d.recent.size == 1) median else d.rssi * 0.85 + median * 0.15
             d.lastSeen = now
             guess(d)
-            if (dirMode && key == trackedAddr) { dirBins[((heading / 30).toInt()) % 12].add(rssi); dirSamples++ }
+            if (dirMode && key == trackedAddr) { dirBins[((heading / (360f / BINS)).toInt()) % BINS].add(rssi); dirSamples++ }
         }
     }
 
