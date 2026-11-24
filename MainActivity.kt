@@ -134,6 +134,7 @@ class MainActivity : Activity() {
     // ── 방향 찾기 ──
     private val sensorMgr by lazy { getSystemService(Context.SENSOR_SERVICE) as SensorManager }
     private var heading = 0f                   // 폰이 보고 있는 방향 (0=북쪽)
+    private var compassAccuracy = SensorManager.SENSOR_STATUS_ACCURACY_HIGH
     private var dirMode = false
     private var dirStart = 0L
     private val BINS = 12                                       // 30도씩 12칸
@@ -144,6 +145,7 @@ class MainActivity : Activity() {
 
     private val compass = object : SensorEventListener {
         override fun onSensorChanged(e: SensorEvent) {
+            if (e.sensor.type != Sensor.TYPE_ROTATION_VECTOR) return
             val m = FloatArray(9)
             SensorManager.getRotationMatrixFromVector(m, e.values)
             val o = FloatArray(3)
@@ -152,7 +154,9 @@ class MainActivity : Activity() {
             radar.arrowDeg = dirBest?.let { it - heading }
             radar.headingDeg = heading
         }
-        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+            if (sensor?.type == Sensor.TYPE_MAGNETIC_FIELD) compassAccuracy = accuracy
+        }
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -279,7 +283,7 @@ class MainActivity : Activity() {
     // ───────────────────────── 방향 찾기 ─────────────────────────
     // 폰 각도(나침반)로 "어느 쪽을 볼 때 신호가 얼마였는지"를 칸마다 기록해요.
     // 그래서 일정한 속도로 돌 필요 없이, 아무렇게나 돌려도 빈 칸만 채우면 돼요.
-    private val needPerBin = 2          // 한 칸마다 신호 2번 이상이면 "확인됨"
+    private val needPerBin = 3          // 한 칸마다 신호 3번 이상이면 "확인됨" (가운데 값을 쓰려면 3번 필요)
     private var dirSamples = 0          // 방향 찾기 중 받은 신호 수
 
     private fun startDirection() {
@@ -317,19 +321,33 @@ class MainActivity : Activity() {
             "레이더 테두리의 회색 칸 쪽으로 몸을 돌려 주세요 (서두르지 않아도 돼요)"
     }
 
-    /** 신호가 제일 센 방향(나침반 각도)과, 제일 센 칸과 제일 약한 칸의 차이(dB) */
+    /**
+     * 기기 방향 계산 (코사인 맞추기 방식)
+     * - 칸마다 튀는 값을 빼려고 "가운데 값(중앙값)"을 써요.
+     * - 제일 센 칸 하나만 보지 않고, 모든 칸을 써서 "앞은 세고 뒤는 약한" 모양에
+     *   제일 잘 맞는 방향을 찾아요. 몸이 가려서 생기는 '뒤쪽 약함'까지 같이 활용해요.
+     * 돌려주는 값: (방향 각도, 확실한 정도 0~1)
+     */
     private fun bestDirection(): Pair<Float, Double> {
-        val avg = dirBins.map { if (it.isEmpty()) null else it.average() }
-        var bestI = 0; var bestV = -999.0; var worstV = 999.0
-        for (i in 0 until BINS) {
-            val near = listOf(avg[(i + BINS - 1) % BINS], avg[i], avg[i], avg[(i + 1) % BINS]).filterNotNull()
-            if (near.isEmpty()) continue
-            val v = near.average()
-            if (v > bestV) { bestV = v; bestI = i }
-            if (v < worstV) worstV = v
+        val med = dirBins.map { b ->
+            if (b.isEmpty()) null else b.sorted().let { it[it.size / 2].toDouble() }
         }
-        val size = 360f / BINS
-        return Pair(bestI * size + size / 2, bestV - worstV)
+        val known = med.filterNotNull()
+        if (known.isEmpty()) return Pair(0f, 0.0)
+        val mean = known.average()
+        val size = 360.0 / BINS
+        var x = 0.0; var y = 0.0; var spread = 0.0
+        for (i in 0 until BINS) {
+            val v = med[i] ?: continue
+            val a = Math.toRadians(i * size + size / 2)
+            val w = v - mean                  // 평균보다 세면 +, 약하면 -
+            x += w * kotlin.math.cos(a)
+            y += w * kotlin.math.sin(a)
+            spread += kotlin.math.abs(w)
+        }
+        val deg = ((Math.toDegrees(kotlin.math.atan2(y, x)) + 360) % 360).toFloat()
+        val strength = if (spread == 0.0) 0.0 else kotlin.math.sqrt(x * x + y * y) / spread
+        return Pair(deg, strength)
     }
 
     private fun finishDirection() {
@@ -342,8 +360,16 @@ class MainActivity : Activity() {
             dirText.text = "아직 확인한 방향이 ${covered}칸뿐이라 판단이 어려워요 😢\n다시 눌러서 더 돌아 주세요."
             return
         }
-        dirBest = bestDirection().first
-        dirText.text = "찾았다! 🔴 빨간 화살표 쪽으로 가 보세요.\n(폰을 돌려도 화살표가 그 방향을 계속 가리켜요)"
+        val (deg, strength) = bestDirection()
+        dirBest = deg
+        val sure = when {
+            strength > 0.5 -> "확실해요 👍"
+            strength > 0.3 -> "꽤 믿을 만해요"
+            else -> "애매해요 🤔 한 번 더 해 보세요"
+        }
+        val warn = if (compassAccuracy <= SensorManager.SENSOR_STATUS_ACCURACY_LOW)
+            "\n⚠️ 나침반이 부정확해요. 폰을 8자로 몇 번 흔든 뒤 다시 해 보세요." else ""
+        dirText.text = "찾았다! 🔴 빨간 화살표 쪽 · $sure\n(폰을 돌려도 화살표가 그 방향을 계속 가리켜요)$warn"
     }
 
     // ───────────────────────── 권한 & 시작 ─────────────────────────
@@ -402,6 +428,10 @@ class MainActivity : Activity() {
         radar.sweeping = true
         sensorMgr.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)?.let {
             sensorMgr.registerListener(compass, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        // 나침반 정확도 확인용
+        sensorMgr.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let {
+            sensorMgr.registerListener(compass, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
         scanBtn.text = "■ 스캔 멈추기"
         status.text = "스캔 중... 주변 기기가 레이더에 나타나요."
